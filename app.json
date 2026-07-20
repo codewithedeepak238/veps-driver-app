@@ -11,6 +11,7 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.veps.driver",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -28,9 +29,23 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#ffffff",
+          "image": "./assets/images/veps-logo.png",
+          "imageWidth": 220
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "VEPS uses your location to record where each trip starts and ends."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "VEPS needs access to your photos to attach images to a trip.",
+          "cameraPermission": "VEPS needs camera access to capture trip photos and videos."
         }
       ]
     ],
