@@ -2,14 +2,10 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import api from '@/lib/api';
+import { reasonLabel } from '@/lib/reasons';
 
-const REASONS: Record<string, string> = {
-  VEHICLE_ISSUE: 'Vehicle Issue',
-  MACHINE_ISSUE: 'Machine Issue',
-  LUNCH_BREAK: 'Lunch Break',
-  OTHER: 'Others',
-};
 const t12 = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
 
@@ -24,6 +20,7 @@ type Breakdown = {
 };
 
 export default function BreakdownsScreen() {
+  const { t } = useTranslation();
   const [items, setItems] = useState<Breakdown[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -52,7 +49,7 @@ export default function BreakdownsScreen() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="checkmark-circle-outline" size={40} color="#cbd5e1" />
-            <Text style={styles.emptyText}>No breakdowns reported today.</Text>
+            <Text style={styles.emptyText}>{t('breakdowns.noneToday')}</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -60,17 +57,17 @@ export default function BreakdownsScreen() {
             <View style={styles.rowTop}>
               <View style={styles.reasonWrap}>
                 <Ionicons name="warning" size={16} color="#d97706" />
-                <Text style={styles.reason}>{REASONS[item.reason] ?? item.reason}</Text>
+                <Text style={styles.reason}>{reasonLabel(item.reason, t)}</Text>
               </View>
               <View style={[styles.pill, { backgroundColor: item.isResolved ? '#ecfdf5' : '#fffbeb' }]}>
                 <Text style={[styles.pillText, { color: item.isResolved ? '#047857' : '#b45309' }]}>
-                  {item.isResolved ? 'Resolved' : 'Ongoing'}
+                  {item.isResolved ? t('breakdowns.resolved') : t('breakdowns.ongoing')}
                 </Text>
               </View>
             </View>
             {item.note ? <Text style={styles.note}>{item.note}</Text> : null}
             <Text style={styles.meta}>
-              {item.trip?.vehiclePlate || '—'}
+              {item.trip?.vehiclePlate || t('common.dash')}
               {item.trip?.zone?.name ? ` · ${item.trip.zone.name}` : ''}
             </Text>
             <Text style={styles.time}>

@@ -16,51 +16,51 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
+import { useTranslation } from 'react-i18next';
 import { useSession } from '@/ctx';
-import { API_BASE_URL } from '@/config';
-
-const features = [
-  { icon: 'location-outline', label: 'GPS Tracking' },
-  { icon: 'shield-checkmark-outline', label: 'Safe & Secure' },
-  { icon: 'camera-outline', label: 'Photo / Video\nCapture' },
-] as const;
+import { connectivityMessage } from '@/lib/api';
 
 export default function SignInScreen() {
+  const { t } = useTranslation();
   const { signIn } = useSession();
-  const [employeeId, setEmployeeId] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const features = [
+    { icon: 'location-outline', label: t('signIn.gpsTracking') },
+    { icon: 'shield-checkmark-outline', label: t('signIn.safeSecure') },
+    { icon: 'camera-outline', label: t('signIn.photoVideoCapture') },
+  ] as const;
+
   const onSubmit = async () => {
-    const id = employeeId.trim();
+    const id = phone.trim();
     const pw = password.trim();
     if (!id || !pw) {
-      setError('Enter your ID and password.');
+      setError(t('signIn.errorEnterCreds'));
       return;
     }
     setError('');
     setLoading(true);
     try {
-      await signIn(id, pw);
+      await signIn(id, pw, remember);
     } catch (err: any) {
       if (axios.isAxiosError(err) && !err.response) {
-        setError(
-          `Can't reach the server at ${API_BASE_URL}. Check that your phone and ` +
-            `computer are on the same Wi-Fi.`,
-        );
+        setError(connectivityMessage(err));
       } else if (err?.response?.status === 401) {
-        setError('Invalid ID or password.');
+        setError(t('signIn.errorInvalid'));
       } else {
-        setError(err?.response?.data?.message || 'Login failed. Please try again.');
+        setError(err?.response?.data?.message || t('signIn.errorGeneric'));
       }
     } finally {
       setLoading(false);
     }
   };
 
-  const comingSoon = (what: string) => Alert.alert(what, `${what} will be available soon.`);
+  const comingSoon = (what: string) => Alert.alert(what, t('signIn.comingSoonMessage', { what }));
 
   return (
     <View style={styles.root}>
@@ -92,9 +92,6 @@ export default function SignInScreen() {
                 style={styles.logo}
                 resizeMode="contain"
               />
-              <Text style={styles.tagline}>
-                Vehicle Mounted Vacuum-Based{'\n'}Litter Picker Operations
-              </Text>
             </View>
 
             {/* Middle: card */}
@@ -103,10 +100,10 @@ export default function SignInScreen() {
                 <Ionicons name="person-outline" size={24} color="#2563eb" />
               </View>
 
-              <Text style={styles.cardTitle}>Driver Login</Text>
+              <Text style={styles.cardTitle}>VEPS FleetOne</Text>
               <View style={styles.dividerRow}>
                 <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>Please login to continue</Text>
+                <Text style={styles.dividerText}>{t('signIn.pleaseLogin')}</Text>
                 <View style={styles.dividerLine} />
               </View>
 
@@ -119,11 +116,12 @@ export default function SignInScreen() {
               <View style={styles.inputRow}>
                 <Ionicons name="phone-portrait-outline" size={18} color="#94a3b8" />
                 <TextInput
-                  value={employeeId}
-                  onChangeText={setEmployeeId}
-                  placeholder="Mobile Number / Employee ID"
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder={t('signIn.mobileNumber')}
                   placeholderTextColor="#9aa3b2"
-                  autoCapitalize="characters"
+                  keyboardType="phone-pad"
+                  autoCapitalize="none"
                   autoCorrect={false}
                   editable={!loading}
                   style={styles.input}
@@ -135,7 +133,7 @@ export default function SignInScreen() {
                 <TextInput
                   value={password}
                   onChangeText={setPassword}
-                  placeholder="Password"
+                  placeholder={t('signIn.password')}
                   placeholderTextColor="#9aa3b2"
                   secureTextEntry={!showPassword}
                   autoCapitalize="none"
@@ -154,9 +152,17 @@ export default function SignInScreen() {
                 </Pressable>
               </View>
 
-              <Pressable onPress={() => comingSoon('Forgot Password')} style={styles.forgotWrap}>
-                <Text style={styles.forgotText}>Forgot Password?</Text>
-              </Pressable>
+              <View style={styles.metaRow}>
+                <Pressable style={styles.remember} onPress={() => setRemember((v) => !v)} hitSlop={8}>
+                  <View style={[styles.checkbox, remember && styles.checkboxOn]}>
+                    {remember && <Ionicons name="checkmark" size={13} color="#fff" />}
+                  </View>
+                  <Text style={styles.rememberText}>{t('signIn.rememberMe')}</Text>
+                </Pressable>
+                <Pressable onPress={() => comingSoon(t('signIn.forgotPasswordTitle'))} hitSlop={8}>
+                  <Text style={styles.forgotText}>{t('signIn.forgotPassword')}</Text>
+                </Pressable>
+              </View>
 
               <Pressable
                 onPress={onSubmit}
@@ -174,24 +180,10 @@ export default function SignInScreen() {
                   ) : (
                     <>
                       <Ionicons name="log-in-outline" size={20} color="#fff" />
-                      <Text style={styles.loginText}>Login</Text>
+                      <Text style={styles.loginText}>{t('signIn.login')}</Text>
                     </>
                   )}
                 </LinearGradient>
-              </Pressable>
-
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.orText}>OR</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              <Pressable
-                onPress={() => comingSoon('Login with OTP')}
-                style={({ pressed }) => [styles.otpBtn, pressed && styles.pressed]}
-              >
-                <Ionicons name="shield-checkmark-outline" size={19} color="#6366f1" />
-                <Text style={styles.otpText}>Login with OTP</Text>
               </Pressable>
             </View>
 
@@ -207,7 +199,7 @@ export default function SignInScreen() {
                   </View>
                 ))}
               </View>
-              <Text style={styles.version}>v 1.0.0</Text>
+              <Text style={styles.version}>{t('signIn.version')}</Text>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -232,8 +224,8 @@ const styles = StyleSheet.create({
   blobOne: { width: 260, height: 260, top: -90, right: -70, backgroundColor: '#cfe0ff' },
   blobTwo: { width: 220, height: 220, top: 60, left: -80, backgroundColor: '#e4d8ff' },
 
-  topGroup: { alignItems: 'center' },
-  logo: { width: 200, height: 64 },
+  topGroup: { alignItems: 'center', paddingTop: 30 },
+  logo: { width: 250, height: 84 },
   tagline: {
     textAlign: 'center',
     color: '#64748b',
@@ -302,6 +294,11 @@ const styles = StyleSheet.create({
 
   forgotWrap: { alignSelf: 'flex-end', marginBottom: 14, marginTop: -1 },
   forgotText: { color: '#6366f1', fontSize: 13, fontWeight: '600' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2, marginBottom: 14 },
+  remember: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  checkbox: { width: 20, height: 20, borderRadius: 6, borderWidth: 1.5, borderColor: '#cbd5e1', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  checkboxOn: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  rememberText: { color: '#475569', fontSize: 13, fontWeight: '600' },
 
   loginWrap: { borderRadius: 12, overflow: 'hidden' },
   loginBtn: {

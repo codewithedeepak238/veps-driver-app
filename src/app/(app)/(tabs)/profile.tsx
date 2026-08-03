@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useSession } from '@/ctx';
 import api from '@/lib/api';
 import Skeleton from '@/components/Skeleton';
@@ -30,6 +31,7 @@ function Row({
 }
 
 export default function ProfileScreen() {
+  const { t } = useTranslation();
   const { driver, signOut } = useSession();
   const [ctx, setCtx] = useState<Ctx>({});
   const [loading, setLoading] = useState(true);
@@ -56,22 +58,21 @@ export default function ProfileScreen() {
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{initials}</Text>
           </View>
-          <Text style={styles.name}>{driver?.name ?? 'Driver'}</Text>
-          <Text style={styles.role}>Driver · {driver?.employeeId}</Text>
+          <Text style={styles.name}>{driver?.name ?? t('profile.driverRole')}</Text>
+          <Text style={styles.role}>{t('profile.driverRoleWithPhone', { phone: driver?.phone })}</Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Details</Text>
-          <Row label="Employee ID" value={driver?.employeeId} />
-          <Row label="Phone" value={driver?.phone} />
-          <Row label="Address" value={driver?.address} />
+          <Text style={styles.cardTitle}>{t('profile.detailsTitle')}</Text>
+          <Row label={t('profile.phone')} value={driver?.phone} />
+          <Row label={t('profile.address')} value={driver?.address} />
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Assignment</Text>
-          <Row label="Vehicle" value={ctx.vehicle ? `${ctx.vehicle.modelName} · ${ctx.vehicle.plateNumber}` : null} loading={loading} />
-          <Row label="Machine" value={ctx.machine?.machineNumber} loading={loading} />
-          <Row label="Zone" value={ctx.assignedZone?.name} loading={loading} />
+          <Text style={styles.cardTitle}>{t('profile.assignmentTitle')}</Text>
+          <Row label={t('profile.vehicle')} value={ctx.vehicle ? `${ctx.vehicle.modelName} · ${ctx.vehicle.plateNumber}` : null} loading={loading} />
+          <Row label={t('profile.machine')} value={ctx.machine?.machineNumber} loading={loading} />
+          <Row label={t('profile.zone')} value={ctx.assignedZone?.name} loading={loading} />
         </View>
 
         <Pressable
@@ -79,7 +80,7 @@ export default function ProfileScreen() {
           style={({ pressed }) => [styles.signOut, pressed && styles.signOutPressed]}
         >
           <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-          <Text style={styles.signOutText}>Sign Out</Text>
+          <Text style={styles.signOutText}>{t('profile.signOut')}</Text>
         </Pressable>
       </ScrollView>
     </SafeAreaView>

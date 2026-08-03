@@ -13,20 +13,25 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import api, { apiErrorMessage } from '@/lib/api';
 import { getCurrentLocation, type GeoPoint } from '@/lib/location';
-import { pickMedia, captureMedia, uploadAsset, type PickedAsset } from '@/lib/media';
+import { pickMedia, capturePhoto, captureVideo, captureSlip, pickSlip, uploadMeterImage, uploadAsset, type PickedAsset } from '@/lib/media';
+import { reasonLabel } from '@/lib/reasons';
 import FadeIn from '@/components/FadeIn';
+import FuelFillingModal from '@/components/FuelFillingModal';
 
 // ── types ────────────────────────────────────────────────────────────────────
 type Opt = { id: string; name: string };
 type Ctx = {
   vehicle?: { plateNumber: string; modelName: string } | null;
   machine?: { machineNumber: string } | null;
+  helper?: { name: string } | null;
   assignedZone?: Opt | null;
   zones?: Opt[];
   routes?: Opt[];
@@ -36,28 +41,30 @@ type Ctx = {
 };
 type Breakdown = { id: string; reason: string; note: string | null; isResolved: boolean };
 type Media = { id: string; type: 'PHOTO' | 'VIDEO'; phase: string; url: string };
+type TripRoute = { id: string; name: string };
 type TripDetail = {
   id: string;
   status: 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED';
   startedAt: string;
-  startOdometer: number;
+  startOdometer: number | null;
+  startEngineHours: number | null;
+  startOdometerImageUrl: string | null;
+  startEngineImageUrl: string | null;
   startLocationName: string | null;
   vehiclePlate: string | null;
   machineNumber: string | null;
+  driver?: { name: string; helper?: { name: string } | null } | null;
   zone?: { name: string } | null;
   route?: { name: string } | null;
+  routes?: TripRoute[];
   breakdowns: Breakdown[];
   media: Media[];
 };
 type Summary = Record<string, any>;
 type Thumb = { uri: string; type: 'PHOTO' | 'VIDEO'; pending?: boolean };
 
-const REASONS = [
-  { key: 'VEHICLE_ISSUE', label: 'Vehicle Issue' },
-  { key: 'MACHINE_ISSUE', label: 'Machine Issue' },
-  { key: 'LUNCH_BREAK', label: 'Lunch Break' },
-  { key: 'OTHER', label: 'Others' },
-];
+const REASON_KEYS = ['VEHICLE_ISSUE', 'MACHINE_ISSUE', 'LUNCH_BREAK', 'OTHER'];
+const getReasons = (t: TFunction) => REASON_KEYS.map((key) => ({ key, label: reasonLabel(key, t) }));
 
 const timeStr = (iso: string) =>
   new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -65,6 +72,7 @@ const fmtMins = (m?: number | null) => (m == null ? '—' : m < 60 ? `${m} min` 
 
 // ── auto location (captures on mount, shows a card, supports refresh) ─────────
 function useLocationCapture() {
+  const { t } = useTranslation();
   const [point, setPoint] = useState<GeoPoint | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,12 +84,12 @@ function useLocationCapture() {
       setPoint(p);
       return p;
     } catch (e: any) {
-      setError(e?.message || 'Could not get location');
+      setError(e?.message || t('trip.location.couldNotGet'));
       return null;
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
   useEffect(() => {
     capture();
   }, [capture]);
@@ -100,26 +108,27 @@ function LocationRow({
   error: string | null;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.locCard}>
       <View style={styles.locIcon}>
         <Ionicons name="location" size={18} color="#2563eb" />
       </View>
       <View style={styles.flex1}>
-        <Text style={styles.label}>Current Location (auto)</Text>
+        <Text style={styles.label}>{t('trip.location.label')}</Text>
         {loading ? (
-          <Text style={styles.locText}>Locating…</Text>
+          <Text style={styles.locText}>{t('trip.location.locating')}</Text>
         ) : error ? (
           <Text style={styles.locError}>{error}</Text>
         ) : point ? (
           <>
-            <Text style={styles.locText}>{point.name ?? 'Location captured'}</Text>
+            <Text style={styles.locText}>{point.name ?? t('trip.location.captured')}</Text>
             <Text style={styles.locCoords}>
               {point.latitude.toFixed(5)}, {point.longitude.toFixed(5)}
             </Text>
           </>
         ) : (
-          <Text style={styles.locText}>—</Text>
+          <Text style={styles.locText}>{t('common.dash')}</Text>
         )}
       </View>
       <Pressable onPress={onRefresh} hitSlop={8} style={styles.locRefresh}>
@@ -130,23 +139,32 @@ function LocationRow({
 }
 
 // ── media picker chooser ─────────────────────────────────────────────────────
-function chooseMedia(onAssets: (assets: PickedAsset[]) => void) {
-  Alert.alert('Add Photo / Video', undefined, [
+// Photo and video capture are separate options: the native camera only records
+// video when launched in video-only mode (and only takes photos in photo mode).
+function chooseMedia(onAssets: (assets: PickedAsset[]) => void, t: TFunction) {
+  Alert.alert(t('trip.mediaPicker.title'), undefined, [
     {
-      text: 'Take Photo / Video',
+      text: t('common.takePhoto'),
       onPress: () =>
-        captureMedia()
+        capturePhoto()
           .then((a) => a && onAssets(a))
-          .catch((e) => Alert.alert('Camera', e?.message || 'Could not open camera.')),
+          .catch((e) => Alert.alert(t('common.camera'), e?.message || t('trip.mediaPicker.cameraError'))),
     },
     {
-      text: 'Choose from Gallery',
+      text: t('common.recordVideo'),
+      onPress: () =>
+        captureVideo()
+          .then((a) => a && onAssets(a))
+          .catch((e) => Alert.alert(t('common.camera'), e?.message || t('trip.mediaPicker.recordError'))),
+    },
+    {
+      text: t('common.chooseFromGallery'),
       onPress: () =>
         pickMedia(true)
           .then((a) => a && onAssets(a))
-          .catch((e) => Alert.alert('Gallery', e?.message || 'Could not open gallery.')),
+          .catch((e) => Alert.alert(t('common.gallery'), e?.message || t('trip.mediaPicker.galleryError'))),
     },
-    { text: 'Cancel', style: 'cancel' },
+    { text: t('common.cancel'), style: 'cancel' },
   ]);
 }
 
@@ -175,6 +193,63 @@ function LabeledInput({
         keyboardType={keyboardType}
         style={styles.input}
       />
+    </View>
+  );
+}
+
+// Single-image chooser for a meter photo (camera or gallery).
+function chooseMeterPhoto(onAsset: (a: PickedAsset) => void, t: TFunction) {
+  Alert.alert(t('trip.meterField.pickerTitle'), undefined, [
+    { text: t('common.takePhoto'), onPress: () => captureSlip().then((a) => a && onAsset(a)).catch((e) => Alert.alert(t('common.camera'), e?.message || t('common.couldNotOpenCamera'))) },
+    { text: t('common.chooseFromGallery'), onPress: () => pickSlip().then((a) => a && onAsset(a)).catch((e) => Alert.alert(t('common.gallery'), e?.message || t('common.couldNotOpenGallery'))) },
+    { text: t('common.cancel'), style: 'cancel' },
+  ]);
+}
+
+// A reading field: manual number AND/OR a photo of the meter (one required).
+function MeterField({
+  label,
+  placeholder,
+  value,
+  onChangeText,
+  image,
+  onPickImage,
+  onRemoveImage,
+}: {
+  label: string;
+  placeholder?: string;
+  value: string;
+  onChangeText: (t: string) => void;
+  image: PickedAsset | null;
+  onPickImage: () => void;
+  onRemoveImage: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#9aa3b2"
+        keyboardType="numeric"
+        style={styles.input}
+      />
+      <Text style={styles.orText}>{t('trip.meterField.orUploadPhoto')}</Text>
+      {image ? (
+        <View style={styles.meterImgWrap}>
+          <Image source={{ uri: image.uri }} style={styles.meterImg} />
+          <Pressable style={styles.meterImgRemove} onPress={onRemoveImage} hitSlop={8}>
+            <Ionicons name="close" size={16} color="#fff" />
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable style={styles.meterAdd} onPress={onPickImage}>
+          <Ionicons name="camera-outline" size={20} color="#6366f1" />
+          <Text style={styles.meterAddText}>{t('trip.meterField.addMeterPhoto')}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -244,10 +319,110 @@ function Dropdown({
   );
 }
 
-function MediaGrid({ items, onAdd, busy }: { items: Thumb[]; onAdd: () => void; busy?: boolean }) {
+// ── manual route entry ───────────────────────────────────────────────────────
+function AddRouteModal({
+  visible,
+  onClose,
+  onSubmit,
+  busy,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onSubmit: (name: string) => void;
+  busy?: boolean;
+}) {
+  const { t } = useTranslation();
+  const [name, setName] = useState('');
+  const submit = () => {
+    const n = name.trim();
+    if (!n) return;
+    onSubmit(n);
+    setName('');
+  };
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.ddBackdrop} onPress={onClose}>
+        <Pressable style={styles.ddSheet} onPress={() => {}}>
+          <View style={styles.modalHead}>
+            <Text style={styles.modalTitle}>{t('trip.routes.addRouteModalTitle')}</Text>
+            <Pressable onPress={onClose} hitSlop={8}>
+              <Ionicons name="close" size={22} color="#64748b" />
+            </Pressable>
+          </View>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            placeholder={t('trip.routes.routeNamePlaceholder')}
+            placeholderTextColor="#9aa3b2"
+            style={styles.input}
+            autoFocus
+            onSubmitEditing={submit}
+            returnKeyType="done"
+          />
+          <View style={{ height: 12 }} />
+          <PrimaryButton title={t('trip.routes.addRoute')} onPress={submit} loading={busy} icon={<Ionicons name="add" size={16} color="#fff" />} />
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function RouteChips({ routes, onRemove }: { routes: string[]; onRemove?: (i: number) => void }) {
+  const { t } = useTranslation();
+  if (routes.length === 0) return <Text style={styles.muted}>{t('trip.routes.noRoutesYet')}</Text>;
+  return (
+    <View style={styles.chips}>
+      {routes.map((r, i) => (
+        <View key={`${r}-${i}`} style={styles.routeChip}>
+          <Text style={styles.routeChipText}>{r}</Text>
+          {onRemove && (
+            <Pressable onPress={() => onRemove(i)} hitSlop={6}>
+              <Ionicons name="close" size={14} color="#4f46e5" />
+            </Pressable>
+          )}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Route editor used on the start form (local list, add + remove). */
+function RouteEditor({
+  routes,
+  onAdd,
+  onRemove,
+}: {
+  routes: string[];
+  onAdd: (name: string) => void;
+  onRemove: (i: number) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
   return (
     <View style={styles.field}>
-      <Text style={styles.label}>Photos / Videos (optional)</Text>
+      <Text style={styles.label}>{t('trip.routes.label')}</Text>
+      <RouteChips routes={routes} onRemove={onRemove} />
+      <Pressable style={styles.addRouteBtn} onPress={() => setOpen(true)}>
+        <Ionicons name="add-circle-outline" size={18} color="#6366f1" />
+        <Text style={styles.addRouteText}>{t('trip.routes.addRoute')}</Text>
+      </Pressable>
+      <AddRouteModal
+        visible={open}
+        onClose={() => setOpen(false)}
+        onSubmit={(n) => {
+          onAdd(n);
+          setOpen(false);
+        }}
+      />
+    </View>
+  );
+}
+
+function MediaGrid({ items, onAdd, busy }: { items: Thumb[]; onAdd: () => void; busy?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{t('trip.mediaGrid.label')}</Text>
       <View style={styles.mediaGrid}>
         {items.map((m, i) => (
           <View key={i} style={styles.thumb}>
@@ -267,7 +442,7 @@ function MediaGrid({ items, onAdd, busy }: { items: Thumb[]; onAdd: () => void; 
         ))}
         <Pressable onPress={onAdd} disabled={busy} style={styles.addTile}>
           <Ionicons name="camera" size={20} color="#6366f1" />
-          <Text style={styles.addTileText}>Add</Text>
+          <Text style={styles.addTileText}>{t('trip.mediaGrid.add')}</Text>
         </Pressable>
       </View>
     </View>
@@ -427,6 +602,7 @@ export default function TripScreen() {
 
 // ── phase: start day (no location) ───────────────────────────────────────────
 function StartDayView({ onStarted }: { onStarted: () => void }) {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const startDay = async () => {
     setBusy(true);
@@ -434,7 +610,7 @@ function StartDayView({ onStarted }: { onStarted: () => void }) {
       await api.post('/driver/day/start', {});
       onStarted(); // instant transition to the trip form
     } catch (e: any) {
-      Alert.alert('Could not start day', apiErrorMessage(e, 'Please try again.'));
+      Alert.alert(t('trip.startDay.couldNotStartTitle'), apiErrorMessage(e, t('common.pleaseTryAgain')));
       setBusy(false);
     }
   };
@@ -444,11 +620,11 @@ function StartDayView({ onStarted }: { onStarted: () => void }) {
         <View style={styles.heroIcon}>
           <MaterialCommunityIcons name="weather-sunset-up" size={40} color="#f59e0b" />
         </View>
-        <Text style={styles.h1}>Start Your Day</Text>
-        <Text style={styles.sub}>Clock in to begin your shift.</Text>
+        <Text style={styles.h1}>{t('trip.startDay.title')}</Text>
+        <Text style={styles.sub}>{t('trip.startDay.sub')}</Text>
         <View style={styles.dayBtn}>
           <PrimaryButton
-            title="Start Day"
+            title={t('trip.startDay.button')}
             onPress={startDay}
             loading={busy}
             icon={<Ionicons name="play" size={16} color="#fff" />}
@@ -467,33 +643,57 @@ function StartTripFormView({
   ctx: Ctx;
   onStarted: (trip: TripDetail, media: PickedAsset[]) => void;
 }) {
+  const { t } = useTranslation();
   const loc = useLocationCapture();
+  const insets = useSafeAreaInsets();
   const [odometer, setOdometer] = useState('');
   const [engine, setEngine] = useState('');
+  const [odometerImg, setOdometerImg] = useState<PickedAsset | null>(null);
+  const [engineImg, setEngineImg] = useState<PickedAsset | null>(null);
   const [zoneId, setZoneId] = useState<string | null>(ctx.assignedZone?.id ?? null);
-  const [routeId, setRouteId] = useState<string | null>(null);
+  const [routeNames, setRouteNames] = useState<string[]>([]);
   const [remarks, setRemarks] = useState('');
   const [media, setMedia] = useState<PickedAsset[]>([]);
   const [busy, setBusy] = useState(false);
+  const [fuelFilled, setFuelFilled] = useState(false);
+  const [fuelModalOpen, setFuelModalOpen] = useState(false);
+  const [fuelAdded, setFuelAdded] = useState(false);
 
   const startTrip = async () => {
     const missing: string[] = [];
-    if (!odometer.trim()) missing.push('Start Odometer');
-    if (!engine.trim()) missing.push('Engine Start Hours');
-    if (!zoneId) missing.push('Zone');
-    if (!routeId) missing.push('Route');
+    if (!odometer.trim() && !odometerImg) missing.push(t('trip.startForm.missingStartOdometer'));
+    if (!engine.trim() && !engineImg) missing.push(t('trip.startForm.missingEngineStart'));
+    if (!zoneId) missing.push(t('trip.startForm.missingZone'));
+    if (routeNames.length === 0) missing.push(t('trip.startForm.missingRoute'));
     if (missing.length) {
-      Alert.alert('Missing details', `Please fill: ${missing.join(', ')}.`);
+      Alert.alert(t('trip.startForm.missingDetailsTitle'), t('trip.startForm.missingFieldsTemplate', { fields: missing.join(', ') }));
+      return;
+    }
+    // A trip cannot start until the current location has been captured.
+    let point = loc.point ?? (await loc.ensure());
+    if (!point) {
+      Alert.alert(
+        t('trip.startForm.locationRequiredTitle'),
+        t('trip.startForm.locationRequiredMessage'),
+      );
       return;
     }
     setBusy(true);
     try {
-      const point = await loc.ensure(); // auto location captured silently
+      // Upload any meter photos first, then start the trip with numbers and/or image URLs.
+      const [odoImg, engImg] = await Promise.all([
+        odometerImg ? uploadMeterImage(odometerImg) : Promise.resolve(null),
+        engineImg ? uploadMeterImage(engineImg) : Promise.resolve(null),
+      ]);
       const res = await api.post('/driver/trips/start', {
-        startOdometer: Number(odometer),
-        startEngineHours: Number(engine),
+        startOdometer: odometer.trim() ? Number(odometer) : undefined,
+        startEngineHours: engine.trim() ? Number(engine) : undefined,
+        startOdometerImageUrl: odoImg?.url,
+        startOdometerImageKey: odoImg?.key,
+        startEngineImageUrl: engImg?.url,
+        startEngineImageKey: engImg?.key,
         zoneId,
-        routeId,
+        routeNames,
         startLatitude: point?.latitude,
         startLongitude: point?.longitude,
         startLocationName: point?.name,
@@ -501,7 +701,7 @@ function StartTripFormView({
       });
       onStarted(res.data.data.trip, media); // instant; media uploads in background
     } catch (e: any) {
-      Alert.alert('Could not start trip', apiErrorMessage(e, 'Please try again.'));
+      Alert.alert(t('trip.startForm.couldNotStartTitle'), apiErrorMessage(e, t('common.pleaseTryAgain')));
       setBusy(false);
     }
   };
@@ -509,35 +709,113 @@ function StartTripFormView({
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <KeyboardAvoidingView style={styles.flex1} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <Text style={styles.h1}>Start Trip</Text>
-          <Text style={styles.sub}>Fill the details, then start your trip.</Text>
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled">
+          <Text style={styles.h1}>{t('trip.startForm.title')}</Text>
+          <Text style={styles.sub}>{t('trip.startForm.sub')}</Text>
 
           <View style={styles.autoRow}>
             <View style={styles.autoBox}>
-              <Text style={styles.autoLabel}>Vehicle</Text>
-              <Text style={styles.autoValue}>{ctx.vehicle?.plateNumber ?? '—'}</Text>
+              <Text style={styles.autoLabel}>{t('trip.startForm.vehicle')}</Text>
+              <Text style={styles.autoValue} numberOfLines={1}>{ctx.vehicle?.plateNumber ?? t('common.dash')}</Text>
             </View>
             <View style={styles.autoBox}>
-              <Text style={styles.autoLabel}>Machine</Text>
-              <Text style={styles.autoValue}>{ctx.machine?.machineNumber ?? '—'}</Text>
+              <Text style={styles.autoLabel}>{t('trip.startForm.machine')}</Text>
+              <Text style={styles.autoValue} numberOfLines={1}>{ctx.machine?.machineNumber ?? t('common.dash')}</Text>
+            </View>
+            <View style={styles.autoBox}>
+              <Text style={styles.autoLabel}>{t('trip.startForm.helper')}</Text>
+              <Text style={styles.autoValue} numberOfLines={1}>{ctx.helper?.name ?? t('common.dash')}</Text>
             </View>
           </View>
 
-          <LabeledInput label="Start Odometer (KM) *" value={odometer} onChangeText={setOdometer} placeholder="e.g. 12000" keyboardType="numeric" />
-          <LabeledInput label="Engine Start Hours *" value={engine} onChangeText={setEngine} placeholder="e.g. 540.5" keyboardType="numeric" />
-          <Dropdown label="Zone *" placeholder="Select a zone" options={ctx.zones ?? []} value={zoneId} onChange={setZoneId} empty="No zones — ask your admin to add one" />
-          <Dropdown label="Route *" placeholder="Select a route" options={ctx.routes ?? []} value={routeId} onChange={setRouteId} empty="No routes — ask your admin to add one" />
+          <MeterField
+            label={t('trip.startForm.startOdometerLabel')}
+            value={odometer}
+            onChangeText={setOdometer}
+            placeholder={t('trip.startForm.startOdometerPlaceholder')}
+            image={odometerImg}
+            onPickImage={() => chooseMeterPhoto(setOdometerImg, t)}
+            onRemoveImage={() => setOdometerImg(null)}
+          />
+          <MeterField
+            label={t('trip.startForm.engineStartLabel')}
+            value={engine}
+            onChangeText={setEngine}
+            placeholder={t('trip.startForm.engineStartPlaceholder')}
+            image={engineImg}
+            onPickImage={() => chooseMeterPhoto(setEngineImg, t)}
+            onRemoveImage={() => setEngineImg(null)}
+          />
+          <Dropdown label={t('trip.startForm.zoneLabel')} placeholder={t('trip.startForm.zonePlaceholder')} options={ctx.zones ?? []} value={zoneId} onChange={setZoneId} empty={t('trip.startForm.noZones')} />
+          <RouteEditor
+            routes={routeNames}
+            onAdd={(n) => setRouteNames((prev) => [...prev, n])}
+            onRemove={(i) => setRouteNames((prev) => prev.filter((_, idx) => idx !== i))}
+          />
+
+          <View style={styles.field}>
+            <Text style={styles.label}>{t('trip.startForm.fuelFilledLabel')}</Text>
+            <View style={styles.yesNoRow}>
+              <Pressable
+                style={[styles.yesNo, fuelFilled && styles.yesNoActive]}
+                onPress={() => {
+                  setFuelFilled(true);
+                  setFuelModalOpen(true);
+                }}
+              >
+                <Text style={[styles.yesNoText, fuelFilled && styles.yesNoTextActive]}>{t('trip.startForm.yes')}</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.yesNo, !fuelFilled && styles.yesNoActive]}
+                onPress={() => {
+                  setFuelFilled(false);
+                  setFuelAdded(false);
+                }}
+              >
+                <Text style={[styles.yesNoText, !fuelFilled && styles.yesNoTextActive]}>{t('trip.startForm.no')}</Text>
+              </Pressable>
+            </View>
+            {fuelFilled && fuelAdded && (
+              <Pressable style={styles.fuelAddedRow} onPress={() => setFuelModalOpen(true)}>
+                <Ionicons name="checkmark-circle" size={15} color="#16a34a" />
+                <Text style={styles.fuelAddedText}>{t('trip.startForm.fuelSavedTapAnother')}</Text>
+              </Pressable>
+            )}
+          </View>
+
           <LocationRow point={loc.point} loading={loc.loading} error={loc.error} onRefresh={loc.capture} />
+
           <MediaGrid
             items={media.map((m) => ({ uri: m.uri, type: m.type }))}
-            onAdd={() => chooseMedia((assets) => setMedia((prev) => [...prev, ...assets]))}
+            onAdd={() => chooseMedia((assets) => setMedia((prev) => [...prev, ...assets]), t)}
           />
-          <LabeledInput label="Remarks (optional)" value={remarks} onChangeText={setRemarks} placeholder="Any notes" />
+          <LabeledInput label={t('trip.remarks.label')} value={remarks} onChangeText={setRemarks} placeholder={t('trip.remarks.placeholder')} />
 
-          <PrimaryButton title="Start Trip" onPress={startTrip} loading={busy} icon={<Ionicons name="play" size={16} color="#fff" />} />
+          {!loc.point && !loc.loading && (
+            <Text style={styles.locHint}>{t('trip.startForm.startEnabledHint')}</Text>
+          )}
+          <PrimaryButton
+            title={loc.point ? t('trip.startForm.startButton') : t('trip.startForm.capturingLocation')}
+            onPress={startTrip}
+            loading={busy}
+            disabled={!loc.point}
+            icon={<Ionicons name="play" size={16} color="#fff" />}
+          />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <FuelFillingModal
+        visible={fuelModalOpen}
+        onClose={() => {
+          setFuelModalOpen(false);
+          if (!fuelAdded) setFuelFilled(false);
+        }}
+        onDone={() => {
+          setFuelModalOpen(false);
+          setFuelAdded(true);
+          setFuelFilled(true);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -554,11 +832,28 @@ function ActiveTripView({
   reloadTrip: (id: string) => Promise<void>;
   onEnded: (summary: Summary) => void;
 }) {
+  const { t } = useTranslation();
   const paused = trip.status === 'PAUSED';
+  const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [showEnd, setShowEnd] = useState(false);
+  const [showAddRoute, setShowAddRoute] = useState(false);
+  const [addingRoute, setAddingRoute] = useState(false);
   const [pending, setPending] = useState<Thumb[]>([]);
+
+  const addRoute = async (name: string) => {
+    setAddingRoute(true);
+    try {
+      const res = await api.post(`/driver/trips/${trip.id}/routes`, { name });
+      onTripUpdate(res.data.data.trip);
+      setShowAddRoute(false);
+    } catch (e: any) {
+      Alert.alert(t('trip.routes.couldNotAddTitle'), apiErrorMessage(e, t('common.pleaseTryAgain')));
+    } finally {
+      setAddingRoute(false);
+    }
+  };
 
   const resume = async () => {
     setBusy(true);
@@ -566,7 +861,7 @@ function ActiveTripView({
       const res = await api.post(`/driver/trips/${trip.id}/resume`);
       onTripUpdate(res.data.data.trip); // optimistic
     } catch (e: any) {
-      Alert.alert('Could not resume', apiErrorMessage(e, 'Please try again.'));
+      Alert.alert(t('trip.active.couldNotResumeTitle'), apiErrorMessage(e, t('common.pleaseTryAgain')));
       setBusy(false);
     }
   };
@@ -578,7 +873,7 @@ function ActiveTripView({
       for (const a of assets) await uploadAsset(trip.id, 'DURING', a).catch(() => {});
       await reloadTrip(trip.id); // server media now includes them
       setPending([]);
-    });
+    }, t);
   };
 
   const openBreakdown = trip.breakdowns.find((b) => !b.isResolved);
@@ -589,31 +884,45 @@ function ActiveTripView({
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 32 }]}>
         <View style={styles.statusHead}>
           <View style={[styles.statusPill, paused ? styles.pillPaused : styles.pillActive]}>
             <View style={[styles.statusDot, { backgroundColor: paused ? '#d97706' : '#2563eb' }]} />
             <Text style={[styles.statusText, { color: paused ? '#b45309' : '#1d4ed8' }]}>
-              {paused ? 'Paused' : 'In Progress'}
+              {paused ? t('home.paused') : t('home.inProgress')}
             </Text>
           </View>
-          <Text style={styles.muted}>Started {timeStr(trip.startedAt)}</Text>
+          <Text style={styles.muted}>{t('trip.active.startedAt', { time: timeStr(trip.startedAt) })}</Text>
         </View>
 
         <View style={styles.card}>
-          <DetailRow label="Vehicle" value={trip.vehiclePlate} />
-          <DetailRow label="Machine" value={trip.machineNumber} />
-          <DetailRow label="Zone" value={trip.zone?.name} />
-          <DetailRow label="Route" value={trip.route?.name} />
-          <DetailRow label="Start location" value={trip.startLocationName} />
-          <DetailRow label="Start odometer" value={String(trip.startOdometer)} />
+          <DetailRow label={t('trip.active.vehicle')} value={trip.vehiclePlate} />
+          <DetailRow label={t('trip.active.machine')} value={trip.machineNumber} />
+          <DetailRow label={t('trip.active.helper')} value={trip.driver?.helper?.name} />
+          <DetailRow label={t('trip.active.zone')} value={trip.zone?.name} />
+          <DetailRow label={t('trip.active.startLocation')} value={trip.startLocationName} />
+          <DetailRow label={t('trip.active.startOdometer')} value={trip.startOdometer != null ? String(trip.startOdometer) : trip.startOdometerImageUrl ? t('trip.active.photoLabel') : t('common.dash')} />
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.routesHead}>
+            <Text style={styles.label}>{t('trip.active.routesTemplate', { count: trip.routes?.length ?? 0 })}</Text>
+            {trip.status !== 'COMPLETED' && (
+              <Pressable style={styles.addRouteMini} onPress={() => setShowAddRoute(true)}>
+                <Ionicons name="add-circle-outline" size={16} color="#6366f1" />
+                <Text style={styles.addRouteText}>{t('trip.active.addRoute')}</Text>
+              </Pressable>
+            )}
+          </View>
+          <View style={{ height: 10 }} />
+          <RouteChips routes={(trip.routes ?? []).map((r) => r.name)} />
         </View>
 
         {paused && openBreakdown && (
           <View style={styles.breakdownBanner}>
             <Ionicons name="warning" size={18} color="#b45309" />
             <Text style={styles.breakdownText}>
-              Paused: {REASONS.find((r) => r.key === openBreakdown.reason)?.label ?? openBreakdown.reason}
+              {t('trip.active.pausedBannerTemplate', { reason: reasonLabel(openBreakdown.reason, t) })}
               {openBreakdown.note ? ` — ${openBreakdown.note}` : ''}
             </Text>
           </View>
@@ -624,17 +933,17 @@ function ActiveTripView({
         </View>
 
         {paused ? (
-          <PrimaryButton title="Resume Trip" onPress={resume} loading={busy} icon={<Ionicons name="play" size={16} color="#fff" />} />
+          <PrimaryButton title={t('trip.active.resumeTrip')} onPress={resume} loading={busy} icon={<Ionicons name="play" size={16} color="#fff" />} />
         ) : (
           <Pressable onPress={() => setShowBreakdown(true)} style={styles.warnBtn}>
             <Ionicons name="warning-outline" size={18} color="#b45309" />
-            <Text style={styles.warnBtnText}>Raise Breakdown</Text>
+            <Text style={styles.warnBtnText}>{t('trip.active.raiseBreakdown')}</Text>
           </Pressable>
         )}
 
         <Pressable onPress={() => setShowEnd(true)} style={styles.endBtn}>
           <Ionicons name="stop-circle-outline" size={18} color="#dc2626" />
-          <Text style={styles.endBtnText}>End Trip</Text>
+          <Text style={styles.endBtnText}>{t('trip.active.endTrip')}</Text>
         </Pressable>
       </ScrollView>
 
@@ -642,29 +951,33 @@ function ActiveTripView({
         visible={showBreakdown}
         tripId={trip.id}
         onClose={() => setShowBreakdown(false)}
-        onDone={(t) => {
+        onDone={(updatedTrip) => {
           setShowBreakdown(false);
-          onTripUpdate(t);
+          onTripUpdate(updatedTrip);
         }}
       />
       <EndTripModal
         visible={showEnd}
         tripId={trip.id}
+        startOdometer={trip.startOdometer}
+        startEngineHours={trip.startEngineHours}
         onClose={() => setShowEnd(false)}
         onEnded={(s) => {
           setShowEnd(false);
           onEnded(s);
         }}
       />
+      <AddRouteModal visible={showAddRoute} onClose={() => setShowAddRoute(false)} onSubmit={addRoute} busy={addingRoute} />
     </SafeAreaView>
   );
 }
 
 function DetailRow({ label, value }: { label: string; value?: string | null }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.detailRow}>
       <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value || '—'}</Text>
+      <Text style={styles.detailValue}>{value || t('common.dash')}</Text>
     </View>
   );
 }
@@ -681,13 +994,16 @@ function BreakdownModal({
   onClose: () => void;
   onDone: (trip: TripDetail) => void;
 }) {
+  const { t } = useTranslation();
   const [reason, setReason] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const insets = useSafeAreaInsets();
+  const reasons = getReasons(t);
 
   const submit = async () => {
     if (!reason) {
-      Alert.alert('Select a reason', 'Please choose a breakdown reason.');
+      Alert.alert(t('trip.breakdownModal.selectReasonTitle'), t('trip.breakdownModal.selectReasonMessage'));
       return;
     }
     setBusy(true);
@@ -698,7 +1014,7 @@ function BreakdownModal({
       setBusy(false);
       onDone(res.data.data.trip);
     } catch (e: any) {
-      Alert.alert('Could not raise breakdown', apiErrorMessage(e, 'Please try again.'));
+      Alert.alert(t('trip.breakdownModal.couldNotRaiseTitle'), apiErrorMessage(e, t('common.pleaseTryAgain')));
       setBusy(false);
     }
   };
@@ -706,16 +1022,16 @@ function BreakdownModal({
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
-        <View style={styles.modalSheet}>
+        <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
           <View style={styles.modalHead}>
-            <Text style={styles.modalTitle}>Raise Breakdown</Text>
+            <Text style={styles.modalTitle}>{t('trip.breakdownModal.title')}</Text>
             <Pressable onPress={onClose} hitSlop={8}>
               <Ionicons name="close" size={22} color="#64748b" />
             </Pressable>
           </View>
-          <Text style={styles.label}>Reason</Text>
+          <Text style={styles.label}>{t('trip.breakdownModal.reasonLabel')}</Text>
           <View style={styles.chips}>
-            {REASONS.map((r) => {
+            {reasons.map((r) => {
               const active = reason === r.key;
               return (
                 <Pressable key={r.key} onPress={() => setReason(r.key)} style={[styles.selChip, active && styles.selChipActive]}>
@@ -725,8 +1041,8 @@ function BreakdownModal({
             })}
           </View>
           <View style={{ height: 12 }} />
-          <LabeledInput label="Note (optional)" value={note} onChangeText={setNote} placeholder="What happened?" />
-          <PrimaryButton title="Raise Breakdown & Pause" onPress={submit} loading={busy} icon={<Ionicons name="warning" size={16} color="#fff" />} />
+          <LabeledInput label={t('trip.breakdownModal.noteLabel')} value={note} onChangeText={setNote} placeholder={t('trip.breakdownModal.notePlaceholder')} />
+          <PrimaryButton title={t('trip.breakdownModal.submit')} onPress={submit} loading={busy} icon={<Ionicons name="warning" size={16} color="#fff" />} />
         </View>
       </View>
     </Modal>
@@ -737,32 +1053,62 @@ function BreakdownModal({
 function EndTripModal({
   visible,
   tripId,
+  startOdometer,
+  startEngineHours,
   onClose,
   onEnded,
 }: {
   visible: boolean;
   tripId: string;
+  startOdometer: number | null;
+  startEngineHours: number | null;
   onClose: () => void;
   onEnded: (summary: Summary) => void;
 }) {
+  const { t } = useTranslation();
   const loc = useLocationCapture();
+  const insets = useSafeAreaInsets();
   const [odometer, setOdometer] = useState('');
   const [engine, setEngine] = useState('');
+  const [odometerImg, setOdometerImg] = useState<PickedAsset | null>(null);
+  const [engineImg, setEngineImg] = useState<PickedAsset | null>(null);
   const [remarks, setRemarks] = useState('');
   const [media, setMedia] = useState<PickedAsset[]>([]);
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    if (!odometer.trim() || !engine.trim()) {
-      Alert.alert('Missing details', 'Enter the end odometer and engine hours.');
+    if (!odometer.trim() && !odometerImg) {
+      Alert.alert(t('trip.endModal.missingOdometerTitle'), t('trip.endModal.missingOdometerMessage'));
+      return;
+    }
+    if (!engine.trim() && !engineImg) {
+      Alert.alert(t('trip.endModal.missingOdometerTitle'), t('trip.endModal.missingEngineMessage'));
+      return;
+    }
+    // Final readings can never be below what was entered at the start
+    // (only when both numeric readings exist).
+    if (startOdometer != null && odometer.trim() && Number(odometer) < startOdometer) {
+      Alert.alert(t('trip.endModal.invalidOdometerTitle'), t('trip.endModal.invalidOdometerMessage', { n: startOdometer }));
+      return;
+    }
+    if (startEngineHours != null && engine.trim() && Number(engine) < startEngineHours) {
+      Alert.alert(t('trip.endModal.invalidEngineTitle'), t('trip.endModal.invalidEngineMessage', { n: startEngineHours }));
       return;
     }
     setBusy(true);
     try {
       const point = await loc.ensure();
+      const [odoImg, engImg] = await Promise.all([
+        odometerImg ? uploadMeterImage(odometerImg) : Promise.resolve(null),
+        engineImg ? uploadMeterImage(engineImg) : Promise.resolve(null),
+      ]);
       const res = await api.post(`/driver/trips/${tripId}/end`, {
-        endOdometer: Number(odometer),
-        endEngineHours: Number(engine),
+        endOdometer: odometer.trim() ? Number(odometer) : undefined,
+        endEngineHours: engine.trim() ? Number(engine) : undefined,
+        endOdometerImageUrl: odoImg?.url,
+        endOdometerImageKey: odoImg?.key,
+        endEngineImageUrl: engImg?.url,
+        endEngineImageKey: engImg?.key,
         endLatitude: point?.latitude,
         endLongitude: point?.longitude,
         endLocationName: point?.name,
@@ -772,7 +1118,7 @@ function EndTripModal({
       media.forEach((a) => uploadAsset(tripId, 'END', a).catch(() => {}));
       onEnded(res.data.data.summary); // instant transition to summary
     } catch (e: any) {
-      Alert.alert('Could not end trip', apiErrorMessage(e, 'Please try again.'));
+      Alert.alert(t('trip.endModal.couldNotEndTitle'), apiErrorMessage(e, t('common.pleaseTryAgain')));
       setBusy(false);
     }
   };
@@ -781,23 +1127,39 @@ function EndTripModal({
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalSheet}>
+          <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
             <View style={styles.modalHead}>
-              <Text style={styles.modalTitle}>End Trip</Text>
+              <Text style={styles.modalTitle}>{t('trip.endModal.title')}</Text>
               <Pressable onPress={onClose} hitSlop={8}>
                 <Ionicons name="close" size={22} color="#64748b" />
               </Pressable>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 480 }}>
-              <LabeledInput label="End Odometer (KM) *" value={odometer} onChangeText={setOdometer} placeholder="e.g. 12085" keyboardType="numeric" />
-              <LabeledInput label="Engine End Hours *" value={engine} onChangeText={setEngine} placeholder="e.g. 548" keyboardType="numeric" />
+              <MeterField
+                label={t('trip.endModal.endOdometerLabel')}
+                value={odometer}
+                onChangeText={setOdometer}
+                placeholder={startOdometer != null ? t('trip.endModal.endOdometerPlaceholderMin', { n: startOdometer }) : t('trip.endModal.endOdometerPlaceholder')}
+                image={odometerImg}
+                onPickImage={() => chooseMeterPhoto(setOdometerImg, t)}
+                onRemoveImage={() => setOdometerImg(null)}
+              />
+              <MeterField
+                label={t('trip.endModal.endEngineLabel')}
+                value={engine}
+                onChangeText={setEngine}
+                placeholder={startEngineHours != null ? t('trip.endModal.endEnginePlaceholderMin', { n: startEngineHours }) : t('trip.endModal.endEnginePlaceholder')}
+                image={engineImg}
+                onPickImage={() => chooseMeterPhoto(setEngineImg, t)}
+                onRemoveImage={() => setEngineImg(null)}
+              />
               <LocationRow point={loc.point} loading={loc.loading} error={loc.error} onRefresh={loc.capture} />
               <MediaGrid
                 items={media.map((m) => ({ uri: m.uri, type: m.type }))}
-                onAdd={() => chooseMedia((assets) => setMedia((prev) => [...prev, ...assets]))}
+                onAdd={() => chooseMedia((assets) => setMedia((prev) => [...prev, ...assets]), t)}
               />
-              <LabeledInput label="Remarks (optional)" value={remarks} onChangeText={setRemarks} placeholder="Any notes" />
-              <PrimaryButton title="End Trip" onPress={submit} loading={busy} danger icon={<Ionicons name="stop-circle" size={16} color="#fff" />} />
+              <LabeledInput label={t('trip.remarks.label')} value={remarks} onChangeText={setRemarks} placeholder={t('trip.remarks.placeholder')} />
+              <PrimaryButton title={t('trip.endModal.endButton')} onPress={submit} loading={busy} danger icon={<Ionicons name="stop-circle" size={16} color="#fff" />} />
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
@@ -808,40 +1170,43 @@ function EndTripModal({
 
 // ── phase: summary ───────────────────────────────────────────────────────────
 function TripSummaryView({ summary, onDone }: { summary: Summary; onDone: () => void }) {
+  const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
   const rows: [string, any][] = [
-    ['Driver', summary.driverName],
-    ['Vehicle', summary.vehicleNumber],
-    ['Machine', summary.machineNumber],
-    ['Zone', summary.zone],
-    ['Route', summary.route],
-    ['Start time', summary.startTime ? timeStr(summary.startTime) : '—'],
-    ['End time', summary.endTime ? timeStr(summary.endTime) : '—'],
-    ['Start location', summary.startLocationName],
-    ['End location', summary.endLocationName],
-    ['Start odometer', summary.startOdometer],
-    ['End odometer', summary.endOdometer],
-    ['Total KM', summary.totalKmRun],
-    ['Engine hours', summary.totalEngineRunningHours],
-    ['Total duration', fmtMins(summary.tripDurationMinutes)],
-    ['Active (excl. breakdowns)', fmtMins(summary.activeDurationMinutes)],
-    ['Breakdown time', fmtMins(summary.breakdownMinutes)],
-    ['Photos / Videos', `${summary.photosUploaded ?? 0} / ${summary.videosUploaded ?? 0}`],
-    ['Remarks', summary.remarks],
+    [t('trip.summary.driver'), summary.driverName],
+    [t('trip.summary.helper'), summary.helperName],
+    [t('trip.summary.vehicle'), summary.vehicleNumber],
+    [t('trip.summary.machine'), summary.machineNumber],
+    [t('trip.summary.zone'), summary.zone],
+    [t('trip.summary.route'), summary.route],
+    [t('trip.summary.startTime'), summary.startTime ? timeStr(summary.startTime) : t('common.dash')],
+    [t('trip.summary.endTime'), summary.endTime ? timeStr(summary.endTime) : t('common.dash')],
+    [t('trip.summary.startLocation'), summary.startLocationName],
+    [t('trip.summary.endLocation'), summary.endLocationName],
+    [t('trip.summary.startOdometer'), summary.startOdometer],
+    [t('trip.summary.endOdometer'), summary.endOdometer],
+    [t('trip.summary.totalKm'), summary.totalKmRun],
+    [t('trip.summary.engineHours'), summary.totalEngineRunningHours],
+    [t('trip.summary.totalDuration'), fmtMins(summary.tripDurationMinutes)],
+    [t('trip.summary.activeDuration'), fmtMins(summary.activeDurationMinutes)],
+    [t('trip.summary.breakdownTime'), fmtMins(summary.breakdownMinutes)],
+    [t('trip.summary.photosVideos'), `${summary.photosUploaded ?? 0} / ${summary.videosUploaded ?? 0}`],
+    [t('trip.summary.remarks'), summary.remarks],
   ];
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 32 }]}>
         <View style={styles.doneIcon}>
           <Ionicons name="checkmark-circle" size={44} color="#16a34a" />
         </View>
-        <Text style={styles.h1}>Trip Completed</Text>
-        <Text style={styles.sub}>Here is your trip summary. Your day has ended.</Text>
+        <Text style={styles.h1}>{t('trip.summary.title')}</Text>
+        <Text style={styles.sub}>{t('trip.summary.sub')}</Text>
         <View style={styles.card}>
           {rows.map(([label, value]) => (
-            <DetailRow key={label} label={label} value={value == null ? '—' : String(value)} />
+            <DetailRow key={label} label={label} value={value == null ? t('common.dash') : String(value)} />
           ))}
         </View>
-        <PrimaryButton title="Done" onPress={onDone} icon={<Ionicons name="checkmark" size={16} color="#fff" />} />
+        <PrimaryButton title={t('trip.summary.done')} onPress={onDone} icon={<Ionicons name="checkmark" size={16} color="#fff" />} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -920,10 +1285,53 @@ const styles = StyleSheet.create({
   ddItemText: { fontSize: 15, color: '#334155' },
   ddItemActive: { color: '#2563eb', fontWeight: '700' },
 
-  autoRow: { flexDirection: 'row', gap: 12 },
-  autoBox: { flex: 1, backgroundColor: '#eef2ff', borderRadius: 12, padding: 12 },
+  routeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#eef2ff',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  routeChipText: { color: '#4f46e5', fontSize: 13, fontWeight: '600' },
+  addRouteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#c7d2fe',
+    backgroundColor: '#eef2ff',
+  },
+  addRouteText: { color: '#6366f1', fontSize: 13, fontWeight: '700' },
+  routesHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  addRouteMini: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  sectionLabel: { fontSize: 12, fontWeight: '700', color: '#64748b', marginTop: 6, textTransform: 'uppercase', letterSpacing: 0.3 },
+  orText: { fontSize: 12, color: '#94a3b8', marginTop: 6 },
+  meterAdd: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 6, height: 56, borderRadius: 12, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#c7d2fe', backgroundColor: '#eef2ff' },
+  meterAddText: { color: '#6366f1', fontSize: 13.5, fontWeight: '600' },
+  meterImgWrap: { marginTop: 6, borderRadius: 12, overflow: 'hidden', height: 150, backgroundColor: '#e2e8f0' },
+  meterImg: { width: '100%', height: '100%' },
+  meterImgRemove: { position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(15,23,42,0.7)', alignItems: 'center', justifyContent: 'center' },
+  yesNoRow: { flexDirection: 'row', gap: 10 },
+  yesNo: { flex: 1, alignItems: 'center', justifyContent: 'center', height: 46, borderRadius: 12, borderWidth: 1.5, borderColor: '#e2e8f0', backgroundColor: '#fff' },
+  yesNoActive: { borderColor: '#a5b4fc', backgroundColor: '#eef2ff' },
+  yesNoText: { fontSize: 15, fontWeight: '700', color: '#64748b' },
+  yesNoTextActive: { color: '#4f46e5' },
+  fuelAddedRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+  fuelAddedText: { fontSize: 13, color: '#16a34a', fontWeight: '600' },
+
+  autoRow: { flexDirection: 'row', gap: 8 },
+  autoBox: { flex: 1, backgroundColor: '#eef2ff', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 11 },
   autoLabel: { fontSize: 11, color: '#6366f1', fontWeight: '600' },
-  autoValue: { fontSize: 16, color: '#312e81', fontWeight: '800', marginTop: 2 },
+  autoValue: { fontSize: 14.5, color: '#312e81', fontWeight: '800', marginTop: 2 },
+  locHint: { fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: 2 },
 
   locCard: {
     flexDirection: 'row',

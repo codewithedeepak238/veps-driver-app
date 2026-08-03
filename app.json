@@ -1,24 +1,24 @@
 {
   "expo": {
-    "name": "veps-driver-app",
+    "name": "VEPS FleetOne",
     "slug": "veps-driver-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "vepsdriverapp",
-    "userInterfaceStyle": "automatic",
-    "ios": {
-      "icon": "./assets/expo.icon"
-    },
+    "userInterfaceStyle": "light",
     "android": {
       "package": "com.veps.driver",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#ffffff",
+        "foregroundImage": "./assets/images/android-icon-foreground.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -30,8 +30,8 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#ffffff",
-          "image": "./assets/images/veps-logo.png",
-          "imageWidth": 220
+          "image": "./assets/images/veps-icon.png",
+          "imageWidth": 200
         }
       ],
       "expo-secure-store",
@@ -47,11 +47,27 @@
           "photosPermission": "VEPS needs access to your photos to attach images to a trip.",
           "cameraPermission": "VEPS needs camera access to capture trip photos and videos."
         }
+      ],
+      "expo-build-properties",
+      "expo-font",
+      "expo-video",
+      [
+        "expo-notifications",
+        {
+          "color": "#2563eb"
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c6ee6bba-7d06-4db7-be77-fc07ffe59eef"
+      }
+    },
+    "owner": "deepak238"
   }
 }

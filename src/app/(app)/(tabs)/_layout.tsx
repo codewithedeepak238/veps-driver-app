@@ -1,10 +1,14 @@
 import { Tabs } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 
 const ACTIVE = '#2563eb';
 const INACTIVE = '#94a3b8';
 
 export default function AppLayout() {
+  const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   return (
     <Tabs
       screenOptions={{
@@ -12,8 +16,8 @@ export default function AppLayout() {
         tabBarActiveTintColor: ACTIVE,
         tabBarInactiveTintColor: INACTIVE,
         tabBarStyle: {
-          height: 62,
-          paddingBottom: 8,
+          height: 58 + insets.bottom,
+          paddingBottom: insets.bottom + 6,
           paddingTop: 6,
           borderTopColor: '#eef0f4',
         },
@@ -23,14 +27,14 @@ export default function AppLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
+          title: t('nav.home'),
           tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="trip"
         options={{
-          title: 'Trip',
+          title: t('nav.trip'),
           tabBarIcon: ({ color, size }) => (
             <MaterialCommunityIcons name="map-marker-path" size={size + 2} color={color} />
           ),
@@ -39,14 +43,14 @@ export default function AppLayout() {
       <Tabs.Screen
         name="alerts"
         options={{
-          title: 'Alerts',
+          title: t('nav.alerts'),
           tabBarIcon: ({ color, size }) => <Ionicons name="notifications" size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
-          title: 'Profile',
+          title: t('nav.profile'),
           tabBarIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
         }}
       />

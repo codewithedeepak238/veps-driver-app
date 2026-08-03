@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import api from '@/lib/api';
+import MediaViewer, { type ViewableMedia } from '@/components/MediaViewer';
 
 type Media = { id: string; type: 'PHOTO' | 'VIDEO'; phase: string; url: string; uploadedAt: string };
 
 export default function MediaGalleryScreen() {
+  const { t } = useTranslation();
   const [items, setItems] = useState<Media[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewing, setViewing] = useState<ViewableMedia | null>(null);
 
   useEffect(() => {
     api
@@ -31,13 +35,13 @@ export default function MediaGalleryScreen() {
       {items.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="images-outline" size={40} color="#cbd5e1" />
-          <Text style={styles.emptyText}>No photos or videos uploaded today.</Text>
+          <Text style={styles.emptyText}>{t('mediaGallery.noneToday')}</Text>
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.scroll}>
           <View style={styles.grid}>
             {items.map((m) => (
-              <Pressable key={m.id} style={styles.tile} onPress={() => Linking.openURL(m.url)}>
+              <Pressable key={m.id} style={styles.tile} onPress={() => setViewing({ type: m.type, url: m.url })}>
                 {m.type === 'PHOTO' ? (
                   <Image source={{ uri: m.url }} style={styles.img} />
                 ) : (
@@ -53,6 +57,7 @@ export default function MediaGalleryScreen() {
           </View>
         </ScrollView>
       )}
+      <MediaViewer item={viewing} onClose={() => setViewing(null)} />
     </SafeAreaView>
   );
 }

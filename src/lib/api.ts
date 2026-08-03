@@ -8,13 +8,31 @@ import { API_BASE_URL } from '@/config';
  */
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 12000,
+  // Generous timeout so slow mobile-data connections don't look like an outage.
+  timeout: 20000,
 });
+
+/**
+ * Human-friendly message for a "no response" network error.
+ * This covers several distinct failures (timeout, DNS, TLS/certificate,
+ * no internet), so the wording stays generic and points at the real,
+ * common device-side causes rather than assuming a Wi-Fi setup.
+ */
+export function connectivityMessage(err?: any): string {
+  const detail = err?.code ? ` (${err.code})` : '';
+  return (
+    "Couldn't connect to the server. Please check:\n" +
+    '• Your phone has a working internet connection\n' +
+    "• The date & time are correct (Settings → Date and time → Automatic)\n\n" +
+    'If it keeps happening, try again on a different network.' +
+    detail
+  );
+}
 
 /** Human-friendly message for an API error (distinguishes connectivity issues). */
 export function apiErrorMessage(err: any, fallback = 'Something went wrong. Please try again.'): string {
   if (axios.isAxiosError(err) && !err.response) {
-    return `Can't reach the server (${API_BASE_URL}). Make sure your phone and computer are on the same Wi-Fi and the backend is running.`;
+    return connectivityMessage(err);
   }
   return err?.response?.data?.message || fallback;
 }

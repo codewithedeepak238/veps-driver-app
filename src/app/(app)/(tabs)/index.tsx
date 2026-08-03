@@ -12,9 +12,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import { useSession } from '@/ctx';
 import api from '@/lib/api';
 import Skeleton from '@/components/Skeleton';
+import SideDrawer from '@/components/SideDrawer';
 
 const SK_ON_BANNER = 'rgba(255,255,255,0.3)';
 
@@ -38,11 +40,11 @@ type Trip = {
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-const greeting = () => {
+const greeting = (t: (key: string) => string) => {
   const h = new Date().getHours();
-  if (h < 12) return 'Good Morning,';
-  if (h < 17) return 'Good Afternoon,';
-  return 'Good Evening,';
+  if (h < 12) return t('greeting.morning');
+  if (h < 17) return t('greeting.afternoon');
+  return t('greeting.evening');
 };
 const hhmm = (mins: number | null | undefined) => {
   const m = mins ?? 0;
@@ -53,20 +55,25 @@ const timeStr = (iso: string) =>
   new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: true });
 
 export default function HomeScreen() {
+  const { t } = useTranslation();
   const { driver } = useSession();
   const router = useRouter();
   const [ctx, setCtx] = useState<Ctx>({});
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [unread, setUnread] = useState(0);
 
   const load = useCallback(async () => {
     try {
-      const [c, t] = await Promise.all([
+      const [c, tripsRes, u] = await Promise.all([
         api.get('/driver/trips/context'),
         api.get('/driver/trips'),
+        api.get('/driver/notifications/unread-count').catch(() => null),
       ]);
       setCtx(c.data.data);
-      setTrips(t.data.data.trips);
+      setTrips(tripsRes.data.data.trips);
+      if (u) setUnread(u.data.data.count ?? 0);
     } catch {
       /* keep last data on transient errors */
     } finally {
@@ -77,20 +84,25 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
+      const interval = setInterval(load, 15000);
+      return () => clearInterval(interval);
     }, [load]),
   );
 
   const activeTrip = trips.find((t) => t.status === 'IN_PROGRESS' || t.status === 'PAUSED') || null;
   const todayTrip = trips.find((t) => isToday(t.startedAt)) || null;
-  const routes = ctx.routes ?? [];
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      <SideDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} vehicle={ctx.vehicle} machine={ctx.machine} />
+
       {/* App bar */}
       <View style={styles.appbar}>
-        <Pressable hitSlop={8} onPress={() => router.push('/profile')}>
-          <Ionicons name="menu" size={26} color="#334155" />
-        </Pressable>
+        <View style={styles.appbarSide}>
+          <Pressable hitSlop={8} onPress={() => setDrawerOpen(true)}>
+            <Ionicons name="menu" size={26} color="#334155" />
+          </Pressable>
+        </View>
         <Image
           source={require('../../../../assets/images/veps-logo.png')}
           style={styles.appbarLogo}
@@ -99,6 +111,11 @@ export default function HomeScreen() {
         <View style={styles.appbarRight}>
           <Pressable hitSlop={8} onPress={() => router.push('/alerts')} style={styles.bellBtn}>
             <Ionicons name="notifications-outline" size={22} color="#334155" />
+            {unread > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{unread > 9 ? '9+' : unread}</Text>
+              </View>
+            )}
           </Pressable>
           <Pressable hitSlop={8} onPress={() => router.push('/profile')} style={styles.avatarBtn}>
             <Ionicons name="person" size={18} color="#fff" />
@@ -115,33 +132,34 @@ export default function HomeScreen() {
           style={styles.banner}
         >
           <Image
-            source={require('../../../../assets/images/truck.png')}
+            source={require('../../../../assets/images/truck2.png')}
             style={styles.truck}
             resizeMode="contain"
+            resizeMethod="scale"
           />
-          <Text style={styles.greeting}>{greeting()}</Text>
-          <Text style={styles.driverName}>{driver?.name ?? 'Driver'}</Text>
-          <Text style={styles.role}>Driver</Text>
+          <Text style={styles.greeting}>{greeting(t)}</Text>
+          <Text style={styles.driverName}>{driver?.name ?? t('home.driverRole')}</Text>
+          <Text style={styles.role}>{t('home.driverRole')}</Text>
 
           <View style={styles.bannerFooter}>
             <View style={styles.bannerIconWrap}>
               <MaterialCommunityIcons name="truck" size={18} color="#fff" />
             </View>
             <View>
-              <Text style={styles.footLabel}>Vehicle No.</Text>
+              <Text style={styles.footLabel}>{t('home.vehicleNo')}</Text>
               {loading ? (
                 <Skeleton width={92} height={15} color={SK_ON_BANNER} style={styles.footSk} />
               ) : (
-                <Text style={styles.footValue}>{ctx.vehicle?.plateNumber ?? '—'}</Text>
+                <Text style={styles.footValue}>{ctx.vehicle?.plateNumber ?? t('common.dash')}</Text>
               )}
             </View>
             <View style={styles.footDivider} />
             <View>
-              <Text style={styles.footLabel}>Machine No.</Text>
+              <Text style={styles.footLabel}>{t('home.machineNo')}</Text>
               {loading ? (
                 <Skeleton width={72} height={15} color={SK_ON_BANNER} style={styles.footSk} />
               ) : (
-                <Text style={styles.footValue}>{ctx.machine?.machineNumber ?? '—'}</Text>
+                <Text style={styles.footValue}>{ctx.machine?.machineNumber ?? t('common.dash')}</Text>
               )}
             </View>
           </View>
@@ -153,28 +171,11 @@ export default function HomeScreen() {
             <View style={styles.assignIcon}>
               <Ionicons name="location-outline" size={16} color="#2563eb" />
             </View>
-            <Text style={styles.assignLabel}>Zone</Text>
+            <Text style={styles.assignLabel}>{t('home.zone')}</Text>
             {loading ? (
               <Skeleton width={120} height={15} />
             ) : (
-              <Text style={styles.assignValue}>{ctx.assignedZone?.name ?? '—'}</Text>
-            )}
-          </View>
-          <Text style={styles.assignRoutesLabel}>Available Routes</Text>
-          <View style={styles.chips}>
-            {loading ? (
-              <>
-                <Skeleton width={80} height={26} radius={999} />
-                <Skeleton width={104} height={26} radius={999} />
-              </>
-            ) : routes.length === 0 ? (
-              <Text style={styles.muted}>None</Text>
-            ) : (
-              routes.map((r) => (
-                <View key={r.id} style={styles.chip}>
-                  <Text style={styles.chipText}>{r.name}</Text>
-                </View>
-              ))
+              <Text style={styles.assignValue}>{ctx.assignedZone?.name ?? t('common.dash')}</Text>
             )}
           </View>
         </View>
@@ -212,17 +213,17 @@ export default function HomeScreen() {
                     { color: activeTrip.status === 'PAUSED' ? '#b45309' : '#1d4ed8' },
                   ]}
                 >
-                  {activeTrip.status === 'PAUSED' ? 'Paused' : 'In Progress'}
+                  {activeTrip.status === 'PAUSED' ? t('home.paused') : t('home.inProgress')}
                 </Text>
               </View>
-              <Text style={styles.mutedSmall}>Started {timeStr(activeTrip.startedAt)}</Text>
+              <Text style={styles.mutedSmall}>{t('home.startedAt', { time: timeStr(activeTrip.startedAt) })}</Text>
             </View>
             <Text style={styles.activeMeta}>
-              {(activeTrip.zone?.name ?? '—')}
+              {(activeTrip.zone?.name ?? t('common.dash'))}
               {activeTrip.route?.name ? ` · ${activeTrip.route.name}` : ''}
             </Text>
             <Pressable style={styles.viewTripBtn} onPress={() => router.push('/trip')}>
-              <Text style={styles.viewTripText}>View Trip</Text>
+              <Text style={styles.viewTripText}>{t('home.viewTrip')}</Text>
               <Ionicons name="chevron-forward" size={16} color="#2563eb" />
             </Pressable>
           </View>
@@ -233,8 +234,8 @@ export default function HomeScreen() {
                 <Ionicons name="navigate-outline" size={26} color="#6366f1" />
               </View>
               <View style={styles.flex1}>
-                <Text style={styles.noTripTitle}>No Trip Started</Text>
-                <Text style={styles.noTripSub}>Start your trip to capture operation details</Text>
+                <Text style={styles.noTripTitle}>{t('home.noTripStarted')}</Text>
+                <Text style={styles.noTripSub}>{t('home.noTripSub')}</Text>
               </View>
             </View>
             <Pressable onPress={() => router.push('/trip')} style={styles.startWrap}>
@@ -244,7 +245,7 @@ export default function HomeScreen() {
                 end={{ x: 1, y: 0 }}
                 style={styles.startBtn}
               >
-                <Text style={styles.startText}>Start Trip</Text>
+                <Text style={styles.startText}>{t('home.startTrip')}</Text>
                 <Ionicons name="play" size={15} color="#fff" />
               </LinearGradient>
             </Pressable>
@@ -256,36 +257,43 @@ export default function HomeScreen() {
           <ActionCard
             icon={<Ionicons name="time-outline" size={22} color="#16a34a" />}
             tint="#dcfce7"
-            title="Trip History"
-            sub="View your previous trips"
+            title={t('home.tripHistoryTitle')}
+            sub={t('home.tripHistorySub')}
             onPress={() => router.push('/trip-history')}
           />
           <ActionCard
             icon={<Ionicons name="warning-outline" size={22} color="#d97706" />}
             tint="#fef3c7"
-            title="Breakdown"
-            sub="Report vehicle issue"
+            title={t('home.breakdownTitle')}
+            sub={t('home.breakdownSub')}
             onPress={() => router.push('/breakdowns')}
           />
           <ActionCard
             icon={<Ionicons name="images-outline" size={22} color="#7c3aed" />}
             tint="#ede9fe"
-            title="Media Gallery"
-            sub="View uploaded photos & videos"
+            title={t('home.mediaGalleryTitle')}
+            sub={t('home.mediaGallerySub')}
             onPress={() => router.push('/media-gallery')}
+          />
+          <ActionCard
+            icon={<MaterialCommunityIcons name="fuel" size={22} color="#0891b2" />}
+            tint="#cffafe"
+            title={t('home.fuelFillingsTitle')}
+            sub={t('home.fuelFillingsSub')}
+            onPress={() => router.push('/fuel')}
           />
         </View>
 
         {/* Today's summary */}
         <View style={styles.card}>
           <View style={styles.summaryHead}>
-            <Text style={styles.summaryTitle}>Today&apos;s Summary</Text>
+            <Text style={styles.summaryTitle}>{t('home.todaysSummary')}</Text>
             <Pressable
-              onPress={() => (todayTrip ? router.push(`/trip-detail/${todayTrip.id}`) : Alert.alert('No trip today', 'No trip has been recorded today yet.'))}
+              onPress={() => (todayTrip ? router.push(`/trip-detail/${todayTrip.id}`) : Alert.alert(t('home.noTripTodayTitle'), t('home.noTripTodayMessage')))}
               hitSlop={6}
               style={styles.viewDetails}
             >
-              <Text style={styles.viewDetailsText}>View Details</Text>
+              <Text style={styles.viewDetailsText}>{t('home.viewDetails')}</Text>
               <Ionicons name="chevron-forward" size={14} color="#2563eb" />
             </Pressable>
           </View>
@@ -293,25 +301,25 @@ export default function HomeScreen() {
             <Stat
               icon={<Ionicons name="speedometer-outline" size={20} color="#2563eb" />}
               value={(todayTrip?.totalKm ?? 0).toFixed(1)}
-              label="KM Run"
+              label={t('home.kmRun')}
               loading={loading}
             />
             <Stat
               icon={<MaterialCommunityIcons name="engine-outline" size={20} color="#16a34a" />}
               value={(todayTrip?.totalEngineHours ?? 0).toFixed(1)}
-              label="Engine Hours"
+              label={t('home.engineHours')}
               loading={loading}
             />
             <Stat
               icon={<Ionicons name="time-outline" size={20} color="#d97706" />}
               value={hhmm(todayTrip?.durationMinutes)}
-              label="Duration"
+              label={t('home.duration')}
               loading={loading}
             />
             <Stat
               icon={<Ionicons name="camera-outline" size={20} color="#7c3aed" />}
               value={String(todayTrip?._count?.media ?? 0)}
-              label="Photos/Videos"
+              label={t('home.photosVideos')}
               loading={loading}
             />
           </View>
@@ -387,9 +395,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#eef0f4',
   },
-  appbarLogo: { width: 132, height: 34 },
-  appbarRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  appbarLogo: { width: 190, height: 50, marginLeft: 14 },
+  appbarSide: { flex: 1, alignItems: 'flex-start' },
+  appbarRight: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 12 },
   bellBtn: { padding: 2 },
+  badge: { position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: '#ef4444', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
+  badgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
   avatarBtn: {
     width: 34,
     height: 34,

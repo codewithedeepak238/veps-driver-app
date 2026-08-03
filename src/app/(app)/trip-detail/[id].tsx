@@ -1,16 +1,13 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import api from '@/lib/api';
+import MediaViewer, { type ViewableMedia } from '@/components/MediaViewer';
+import { reasonLabel } from '@/lib/reasons';
 
-const REASONS: Record<string, string> = {
-  VEHICLE_ISSUE: 'Vehicle Issue',
-  MACHINE_ISSUE: 'Machine Issue',
-  LUNCH_BREAK: 'Lunch Break',
-  OTHER: 'Others',
-};
 const t12 = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short', hour12: true } as any) : '—';
 const fmtMins = (m?: number | null) => (m == null ? '—' : m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`);
@@ -25,10 +22,12 @@ function Row({ label, value }: { label: string; value: any }) {
 }
 
 export default function TripDetailScreen() {
+  const { t } = useTranslation();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [trip, setTrip] = useState<any>(null);
   const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [viewing, setViewing] = useState<ViewableMedia | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -52,7 +51,7 @@ export default function TripDetailScreen() {
   if (!trip || !summary) {
     return (
       <View style={styles.center}>
-        <Text style={styles.muted}>Trip not found.</Text>
+        <Text style={styles.muted}>{t('tripDetail.notFound')}</Text>
       </View>
     );
   }
@@ -64,39 +63,40 @@ export default function TripDetailScreen() {
     <SafeAreaView style={styles.safe} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Summary</Text>
-          <Row label="Driver" value={summary.driverName} />
-          <Row label="Vehicle" value={summary.vehicleNumber} />
-          <Row label="Machine" value={summary.machineNumber} />
-          <Row label="Zone" value={summary.zone} />
-          <Row label="Route" value={summary.route} />
-          <Row label="Start time" value={t12(summary.startTime)} />
-          <Row label="End time" value={t12(summary.endTime)} />
-          <Row label="Start location" value={summary.startLocationName} />
-          <Row label="End location" value={summary.endLocationName} />
-          <Row label="Start odometer" value={summary.startOdometer} />
-          <Row label="End odometer" value={summary.endOdometer} />
-          <Row label="Total KM" value={summary.totalKmRun} />
-          <Row label="Engine hours" value={summary.totalEngineRunningHours} />
-          <Row label="Total duration" value={fmtMins(summary.tripDurationMinutes)} />
-          <Row label="Active (excl. breakdowns)" value={fmtMins(summary.activeDurationMinutes)} />
-          <Row label="Breakdown time" value={fmtMins(summary.breakdownMinutes)} />
-          <Row label="Remarks" value={summary.remarks} />
+          <Text style={styles.cardTitle}>{t('tripDetail.summaryTitle')}</Text>
+          <Row label={t('tripDetail.driver')} value={summary.driverName} />
+          <Row label={t('tripDetail.helper')} value={summary.helperName} />
+          <Row label={t('tripDetail.vehicle')} value={summary.vehicleNumber} />
+          <Row label={t('tripDetail.machine')} value={summary.machineNumber} />
+          <Row label={t('tripDetail.zone')} value={summary.zone} />
+          <Row label={t('tripDetail.route')} value={summary.route} />
+          <Row label={t('tripDetail.startTime')} value={t12(summary.startTime)} />
+          <Row label={t('tripDetail.endTime')} value={t12(summary.endTime)} />
+          <Row label={t('tripDetail.startLocation')} value={summary.startLocationName} />
+          <Row label={t('tripDetail.endLocation')} value={summary.endLocationName} />
+          <Row label={t('tripDetail.startOdometer')} value={summary.startOdometer} />
+          <Row label={t('tripDetail.endOdometer')} value={summary.endOdometer} />
+          <Row label={t('tripDetail.totalKm')} value={summary.totalKmRun} />
+          <Row label={t('tripDetail.engineHours')} value={summary.totalEngineRunningHours} />
+          <Row label={t('tripDetail.totalDuration')} value={fmtMins(summary.tripDurationMinutes)} />
+          <Row label={t('tripDetail.activeDuration')} value={fmtMins(summary.activeDurationMinutes)} />
+          <Row label={t('tripDetail.breakdownTime')} value={fmtMins(summary.breakdownMinutes)} />
+          <Row label={t('tripDetail.remarks')} value={summary.remarks} />
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Breakdowns ({breakdowns.length})</Text>
+          <Text style={styles.cardTitle}>{t('tripDetail.breakdownsTemplate', { count: breakdowns.length })}</Text>
           {breakdowns.length === 0 ? (
-            <Text style={styles.muted}>No breakdowns.</Text>
+            <Text style={styles.muted}>{t('tripDetail.noBreakdowns')}</Text>
           ) : (
             breakdowns.map((b: any) => (
               <View key={b.id} style={styles.bd}>
                 <View style={styles.bdDot} />
                 <View style={styles.flex1}>
-                  <Text style={styles.bdReason}>{REASONS[b.reason] ?? b.reason}</Text>
+                  <Text style={styles.bdReason}>{reasonLabel(b.reason, t)}</Text>
                   {b.note ? <Text style={styles.bdNote}>{b.note}</Text> : null}
                   <Text style={styles.bdTime}>
-                    {t12(b.startedAt)}{b.resolvedAt ? ` → ${t12(b.resolvedAt)}` : ' · ongoing'}
+                    {t12(b.startedAt)}{b.resolvedAt ? ` → ${t12(b.resolvedAt)}` : ` · ${t('tripDetail.ongoing')}`}
                   </Text>
                 </View>
               </View>
@@ -105,13 +105,13 @@ export default function TripDetailScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Media ({media.length})</Text>
+          <Text style={styles.cardTitle}>{t('tripDetail.mediaTemplate', { count: media.length })}</Text>
           {media.length === 0 ? (
-            <Text style={styles.muted}>No photos or videos.</Text>
+            <Text style={styles.muted}>{t('tripDetail.noMedia')}</Text>
           ) : (
             <View style={styles.mediaGrid}>
               {media.map((m: any) => (
-                <Pressable key={m.id} style={styles.thumb} onPress={() => Linking.openURL(m.url)}>
+                <Pressable key={m.id} style={styles.thumb} onPress={() => setViewing({ type: m.type, url: m.url })}>
                   {m.type === 'PHOTO' ? (
                     <Image source={{ uri: m.url }} style={styles.thumbImg} />
                   ) : (
@@ -125,6 +125,7 @@ export default function TripDetailScreen() {
           )}
         </View>
       </ScrollView>
+      <MediaViewer item={viewing} onClose={() => setViewing(null)} />
     </SafeAreaView>
   );
 }
